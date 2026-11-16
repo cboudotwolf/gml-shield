@@ -6,6 +6,7 @@ Application de gestion de missions pour chauffeurs et répartiteurs. API FastAPI
 
 - Connexion Argon2id, session JWT de 15 minutes en cookie HttpOnly et protection CSRF.
 - Accès aux missions limité par rôle et affectation. Codes d’entrepôt chiffrés avec AES-256-GCM.
+- Le chauffeur peut enregistrer et relire ses propres messages. Les requêtes SQL utilisent les paramètres de SQLAlchemy.
 - Statuts, notifications WebSocket, preuves privées JPEG/PNG/PDF et journal d’audit.
 - PostgreSQL, migrations Alembic, ClamAV et Docker Compose.
 
