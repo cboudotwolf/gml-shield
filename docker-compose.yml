@@ -1,0 +1,40 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      GML_JWT_SECRET: ${GML_JWT_SECRET}
+      GML_AES_KEY_B64: ${GML_AES_KEY_B64}
+      GML_ALLOWED_ORIGIN: ${GML_ALLOWED_ORIGIN:-http://localhost:8000}
+      GML_COOKIE_SECURE: ${GML_COOKIE_SECURE:-false}
+      GML_PRIVATE_UPLOADS: /data/private_uploads
+      CLAMAV_HOST: clamav
+    volumes:
+      - private_uploads:/data/private_uploads
+    depends_on:
+      db: {condition: service_healthy}
+      clamav: {condition: service_started}
+    expose: ["8000"]
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-gml_shield}
+      POSTGRES_USER: ${POSTGRES_USER:-gml}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gml} -d ${POSTGRES_DB:-gml_shield}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  clamav:
+    image: clamav/clamav:1.4
+    restart: unless-stopped
+    volumes: ["clamav_data:/var/lib/clamav"]
+    expose: ["3310"]
+volumes:
+  postgres_data:
+  private_uploads:
+  clamav_data:

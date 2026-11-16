@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.DS_Store
+frontend/node_modules/
+frontend/package-lock.json
+frontend_dist/
+private_uploads/
+*.sqlite3
