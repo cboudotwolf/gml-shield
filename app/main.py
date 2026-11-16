@@ -72,6 +72,14 @@ class Mission(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
+class DriverMessage(Base):
+    __tablename__ = "driver_messages"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    driver_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 class Document(Base):
     __tablename__ = "documents"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -109,6 +117,10 @@ class StatusInput(BaseModel):
     status: str
 
 
+class DriverMessageInput(BaseModel):
+    content: str = Field(min_length=1, max_length=2000)
+
+
 class UserView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -126,6 +138,14 @@ class MissionView(BaseModel):
     dispatcher_id: int
     created_at: datetime
     documents: list[str] = []
+
+
+class DriverMessageView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    driver_id: int
+    content: str
+    created_at: datetime
 
 
 class Hub:
@@ -352,6 +372,34 @@ async def list_missions(request: Request, db: Db):
         await record_audit(db, request, "MISSION_LIST_READ_SECRET", "missions", user.id)
         await db.commit()
     return result
+
+
+@app.post("/api/messages", response_model=DriverMessageView, status_code=201)
+async def create_driver_message(payload: DriverMessageInput, request: Request, db: Db, user: User = Depends(require_csrf)):
+    if user.role != "DRIVER":
+        raise HTTPException(403, "Réservé au chauffeur")
+    content = payload.content.strip()
+    if not content:
+        raise HTTPException(422, "Le message ne peut pas être vide")
+    driver_message = DriverMessage(driver_id=user.id, content=content)
+    db.add(driver_message)
+    await db.flush()
+    await record_audit(db, request, "DRIVER_MESSAGE_CREATE", f"message:{driver_message.id}", user.id)
+    await db.commit()
+    await db.refresh(driver_message)
+    return DriverMessageView.model_validate(driver_message)
+
+
+@app.get("/api/messages", response_model=list[DriverMessageView])
+async def list_driver_messages(request: Request, db: Db):
+    user = await authenticated_user(request, db)
+    if user.role != "DRIVER":
+        raise HTTPException(403, "Réservé au chauffeur")
+    query = select(DriverMessage).where(DriverMessage.driver_id == user.id).order_by(DriverMessage.created_at.desc()).limit(100)
+    driver_messages = list((await db.scalars(query)).all())
+    await record_audit(db, request, "DRIVER_MESSAGES_READ", "driver_messages", user.id)
+    await db.commit()
+    return driver_messages
 
 
 @app.patch("/api/missions/{mission_id}/status")
