@@ -1,0 +1,41 @@
+textarea {
+  width: 100%;
+  border: 1px solid #dce4e8;
+  border-radius: 9px;
+  padding: 12px;
+  background: #fff;
+  color: #172b3a;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+textarea:focus {
+  outline: 2px solid #a6dfd9;
+  border-color: #087f8c;
+}
+
+.driver-message-panel {
+  margin-top: 24px;
+}
+
+.driver-message-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.driver-message {
+  border-top: 1px solid #edf0f2;
+  padding: 12px 0;
+}
+
+.driver-message p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0 0 8px;
+}
+
+.driver-message time {
+  font-size: 11px;
+  color: #73818a;
+}

@@ -1,7 +1,9 @@
 import './style.css';
+import './driver-messages.css';
 
 type User = { id: number; email: string; role: 'ADMIN' | 'DISPATCHER' | 'DRIVER' };
 type Mission = { id: number; title: string; destination: string; secret_code: string; status: string; driver_id: number; documents: string[] };
+type DriverMessage = { id: number; content: string; created_at: string };
 type Driver = { id: number; email: string; role: string };
 const app = document.querySelector<HTMLMainElement>('#app')!;
 
@@ -61,8 +63,24 @@ async function showDispatcher(user: User): Promise<void> {
 }
 
 async function showDriver(user: User): Promise<void> {
-  const missions = await api<Mission[]>('/api/missions');
-  app.innerHTML = `<header class="topbar"><div><span class="brand-mark small">G</span><strong>GML-SHIELD</strong></div><div class="account">${escapeHtml(user.email)} <span class="live-dot">Temps réel</span><button id="logout" class="text-button">Déconnexion</button></div></header><section class="content narrow"><p class="eyebrow">ESPACE CHAUFFEUR</p><h1>Mes missions</h1><p class="muted">Vos missions restent accessibles après une interruption réseau.</p><div class="mission-list" id="mission-list">${missions.length ? missions.map((m) => missionCard(m, true)).join('') : '<div class="empty">Aucune mission assignée.</div>'}</div><p id="message" class="message" role="status"></p></section>`;
+  const [missions, driverMessages] = await Promise.all([
+    api<Mission[]>('/api/missions'),
+    api<DriverMessage[]>('/api/messages'),
+  ]);
+  const displayedMessages = driverMessages.map((driverMessage) => `<article class="driver-message"><p>${escapeHtml(driverMessage.content)}</p><time>${new Date(driverMessage.created_at).toLocaleString('fr-FR')}</time></article>`).join('');
+  app.innerHTML = `<header class="topbar"><div><span class="brand-mark small">G</span><strong>GML-SHIELD</strong></div><div class="account">${escapeHtml(user.email)} <span class="live-dot">Temps réel</span><button id="logout" class="text-button">Déconnexion</button></div></header><section class="content narrow"><p class="eyebrow">ESPACE CHAUFFEUR</p><h1>Mes missions</h1><p class="muted">Vos missions restent accessibles après une interruption réseau.</p><div class="mission-list" id="mission-list">${missions.length ? missions.map((m) => missionCard(m, true)).join('') : '<div class="empty">Aucune mission assignée.</div>'}</div><section class="panel driver-message-panel"><h2>Mes messages</h2><form id="driver-message-form"><label>Écrire un message<textarea name="content" rows="4" maxlength="2000" required></textarea></label><button>Enregistrer le message</button></form><div class="driver-message-list">${displayedMessages || '<p class="muted">Aucun message enregistré.</p>'}</div></section><p id="message" class="message" role="status"></p></section>`;
+  document.querySelector<HTMLFormElement>('#driver-message-form')!.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget as HTMLFormElement);
+    const content = String(formData.get('content') ?? '');
+    try {
+      await api('/api/messages', { method: 'POST', body: JSON.stringify({ content }) });
+      await showDriver(user);
+      showMessage('Message enregistré.');
+    } catch (error) {
+      showMessage(error instanceof Error ? error.message : 'Enregistrement impossible', 'error');
+    }
+  });
   document.querySelectorAll<HTMLButtonElement>('[data-reveal]').forEach((button) => button.addEventListener('click', () => { const code = document.querySelector<HTMLElement>(`#secret-${button.dataset.reveal}`)!; const revealed = code.textContent !== '••••••••'; code.textContent = revealed ? '••••••••' : code.dataset.value!; button.textContent = revealed ? 'Afficher' : 'Masquer'; }));
   document.querySelectorAll<HTMLButtonElement>('[data-status]').forEach((button) => button.addEventListener('click', async () => { try { await api(`/api/missions/${button.dataset.status}/status`, { method: 'PATCH', body: JSON.stringify({ status: button.dataset.next }) }); await showDriver(user); } catch (error) { showMessage(error instanceof Error ? error.message : 'Mise à jour impossible', 'error'); } }));
   document.querySelectorAll<HTMLInputElement>('[data-upload]').forEach((input) => input.addEventListener('change', async () => { const file = input.files?.[0]; if (!file) return; const body = new FormData(); body.append('upload', file); try { await api(`/api/missions/${input.dataset.upload}/documents`, { method: 'POST', body }); await showDriver(user); showMessage('Preuve envoyée et contrôlée.'); } catch (error) { showMessage(error instanceof Error ? error.message : 'Envoi impossible', 'error'); } }));
