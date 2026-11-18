@@ -1,107 +1,487 @@
-import './style.css';
-import './driver-messages.css';
+import "./style.css";
+import "./driver-messages.css";
 
-type User = { id: number; email: string; role: 'ADMIN' | 'DISPATCHER' | 'DRIVER' };
-type Mission = { id: number; title: string; destination: string; secret_code: string; status: string; driver_id: number; documents: string[] };
-type DriverMessage = { id: number; content: string; created_at: string };
-type Driver = { id: number; email: string; role: string };
-const app = document.querySelector<HTMLMainElement>('#app')!;
+import { requestApi } from "./api-client";
+import { createDriverMessageElement, type DriverMessage } from "./driver-messages";
+import { createWarehouseCodeElement, setTextContent } from "./dom-utils";
 
-function csrfToken(): string {
-  return document.cookie.split('; ').find((part) => part.startsWith('gml_csrf='))?.split('=').slice(1).join('=') ?? '';
+type UserRole = "ADMIN" | "DISPATCHER" | "DRIVER";
+
+interface User {
+  id: number;
+  email: string;
+  role: UserRole;
 }
 
-async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const headers = new Headers(options.headers);
-  if (options.body && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json');
-  if (!['GET', 'HEAD'].includes(options.method ?? 'GET')) headers.set('X-CSRF-Token', decodeURIComponent(csrfToken()));
-  const response = await fetch(path, { ...options, headers, credentials: 'same-origin' });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail ?? `Erreur ${response.status}`);
-  }
-  return response.status === 204 ? undefined as T : response.json() as Promise<T>;
+interface Mission {
+  id: number;
+  title: string;
+  destination: string;
+  secret_code: string;
+  status: string;
+  driver_id: number;
+  documents: string[];
 }
 
-function escapeHtml(value: string): string {
-  const element = document.createElement('span');
-  element.textContent = value;
-  return element.innerHTML;
+interface Driver {
+  id: number;
+  email: string;
+  role: string;
 }
 
-function showMessage(message: string, kind = ''): void {
-  const target = document.querySelector<HTMLElement>('#message');
-  if (target) { target.textContent = message; target.className = `message ${kind}`; }
+interface AuditEntry {
+  action: string;
+  resource: string;
+  result: string;
+  created_at: string;
+}
+
+const applicationRoot = (() => {
+  const rootElement = document.querySelector<HTMLElement>("#app");
+  if (!rootElement) throw new Error("Le conteneur de l'application est introuvable.");
+  return rootElement;
+})();
+
+let driverNotificationSocket: WebSocket | undefined;
+
+function createElement<TagName extends keyof HTMLElementTagNameMap>(
+  tagName: TagName,
+  className?: string,
+  textContent?: string,
+): HTMLElementTagNameMap[TagName] {
+  const element = document.createElement(tagName);
+  if (className) element.className = className;
+  if (textContent !== undefined) element.textContent = textContent;
+  return element;
+}
+
+function createFieldLabel(labelText: string, formControl: HTMLElement): HTMLLabelElement {
+  const fieldLabel = createElement("label");
+  fieldLabel.append(document.createTextNode(labelText), formControl);
+  return fieldLabel;
+}
+
+function createButton(label: string, className?: string): HTMLButtonElement {
+  const button = createElement("button", className, label);
+  button.type = "button";
+  return button;
+}
+
+function setFeedback(messageText: string, isError = false): void {
+  const feedbackElement = applicationRoot.querySelector<HTMLElement>("#message");
+  if (!feedbackElement) return;
+  setTextContent(feedbackElement, messageText);
+  feedbackElement.className = isError ? "message error" : "message";
+}
+
+function createApplicationHeader(email: string, statusLabel?: string): HTMLElement {
+  const header = createElement("header", "topbar");
+  const brand = createElement("div");
+  brand.append(createElement("span", "brand-mark small", "G"), createElement("strong", undefined, "GML-SHIELD"));
+
+  const account = createElement("div", "account");
+  account.append(document.createTextNode(email));
+  if (statusLabel) account.append(createElement("span", "live-dot", statusLabel));
+  account.append(createButton("Déconnexion", "text-button"));
+  header.append(brand, account);
+  return header;
 }
 
 function renderLogin(): void {
-  app.innerHTML = `<section class="login-card"><div class="brand-mark">G</div><p class="eyebrow">GML · ESPACE SÉCURISÉ</p><h1>GML-SHIELD</h1><p class="muted">Connectez-vous pour accéder à vos missions.</p><form id="login-form"><label>Adresse e-mail<input name="email" type="email" autocomplete="username" required></label><label>Mot de passe<input name="password" type="password" autocomplete="current-password" minlength="12" required></label><button>Se connecter</button></form><p id="message" class="message" role="status"></p></section>`;
-  document.querySelector<HTMLFormElement>('#login-form')!.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget as HTMLFormElement);
-    try { await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: form.get('email'), password: form.get('password') }) }); await loadApp(); }
-    catch (error) { showMessage(error instanceof Error ? error.message : 'Connexion impossible', 'error'); }
-  });
-}
+  const loginSection = createElement("section", "login-card");
+  loginSection.append(
+    createElement("div", "brand-mark", "G"),
+    createElement("p", "eyebrow", "GML · ESPACE SÉCURISÉ"),
+    createElement("h1", undefined, "GML-SHIELD"),
+    createElement("p", "muted", "Connectez-vous pour accéder à vos missions."),
+  );
 
-function missionCard(mission: Mission, driver = false): string {
-  const active = mission.status === 'IN_PROGRESS';
-  const nextAction = mission.status === 'PENDING' ? 'IN_PROGRESS' : mission.status === 'IN_PROGRESS' && mission.documents.length ? 'COMPLETED' : '';
-  const actionLabel = mission.status === 'PENDING' ? 'Commencer la mission' : 'Clôturer la mission';
-  return `<article class="mission"><div class="mission-top"><span class="status ${mission.status.toLowerCase()}">${escapeHtml(mission.status)}</span><span class="muted">Mission #${mission.id}</span></div><h3>${escapeHtml(mission.title)}</h3><p><strong>Destination</strong><br>${escapeHtml(mission.destination)}</p>${driver ? `<div class="secret"><span>Code entrepôt</span><code id="secret-${mission.id}" data-value="${escapeHtml(mission.secret_code)}">••••••••</code><button class="text-button" data-reveal="${mission.id}">Afficher</button></div>` : ''}<div class="mission-actions">${driver && active ? `<label class="upload-button">Ajouter une preuve<input type="file" accept="image/jpeg,image/png,application/pdf" data-upload="${mission.id}"></label>` : ''}${driver && nextAction ? `<button class="secondary" data-status="${mission.id}" data-next="${nextAction}">${actionLabel}</button>` : ''}${!driver && mission.documents.length ? `<button class="secondary" data-download="${mission.id}" data-doc="${mission.documents[0]}">Télécharger la preuve</button>` : ''}</div></article>`;
-}
-
-async function showDispatcher(user: User): Promise<void> {
-  const [missions, drivers] = await Promise.all([api<Mission[]>('/api/missions'), api<Driver[]>('/api/drivers')]);
-  app.innerHTML = `<header class="topbar"><div><span class="brand-mark small">G</span><strong>GML-SHIELD</strong></div><div class="account">${escapeHtml(user.email)} <button id="logout" class="text-button">Déconnexion</button></div></header><section class="content"><p class="eyebrow">ESPACE RÉPARTITEUR</p><h1>Suivi des missions</h1><div class="columns"><section class="panel"><h2>Créer une mission</h2><form id="mission-form"><label>Intitulé<input name="title" required maxlength="120"></label><label>Destination<input name="destination" required maxlength="500"></label><label>Code entrepôt<input name="secret_code" required maxlength="200"></label><label>Chauffeur<select name="driver_id" required>${drivers.map((d) => `<option value="${d.id}">${escapeHtml(d.email)}</option>`).join('')}</select></label><button>Créer la mission</button></form><p id="message" class="message" role="status"></p></section><section><h2>Missions créées</h2><div class="mission-list">${missions.length ? missions.map((m) => missionCard(m)).join('') : '<p class="muted">Aucune mission.</p>'}</div></section></div></section>`;
-  document.querySelector<HTMLFormElement>('#mission-form')!.addEventListener('submit', async (event) => {
-    event.preventDefault(); const data = new FormData(event.currentTarget as HTMLFormElement);
-    try { await api('/api/missions', { method: 'POST', body: JSON.stringify({ title: data.get('title'), destination: data.get('destination'), secret_code: data.get('secret_code'), driver_id: Number(data.get('driver_id')) }) }); await showDispatcher(user); showMessage('Mission créée et transmise au chauffeur.'); }
-    catch (error) { showMessage(error instanceof Error ? error.message : 'Création impossible', 'error'); }
-  });
-  document.querySelectorAll<HTMLButtonElement>('[data-download]').forEach((button) => button.addEventListener('click', async () => { const response = await fetch(`/api/missions/${button.dataset.download}/documents/${button.dataset.doc}`, { credentials: 'same-origin' }); if (response.ok) { const blob = await response.blob(); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'preuve'; link.click(); URL.revokeObjectURL(link.href); } }));
-}
-
-async function showDriver(user: User): Promise<void> {
-  const [missions, driverMessages] = await Promise.all([
-    api<Mission[]>('/api/missions'),
-    api<DriverMessage[]>('/api/messages'),
-  ]);
-  const displayedMessages = driverMessages.map((driverMessage) => `<article class="driver-message"><p>${escapeHtml(driverMessage.content)}</p><time>${new Date(driverMessage.created_at).toLocaleString('fr-FR')}</time></article>`).join('');
-  app.innerHTML = `<header class="topbar"><div><span class="brand-mark small">G</span><strong>GML-SHIELD</strong></div><div class="account">${escapeHtml(user.email)} <span class="live-dot">Temps réel</span><button id="logout" class="text-button">Déconnexion</button></div></header><section class="content narrow"><p class="eyebrow">ESPACE CHAUFFEUR</p><h1>Mes missions</h1><p class="muted">Vos missions restent accessibles après une interruption réseau.</p><div class="mission-list" id="mission-list">${missions.length ? missions.map((m) => missionCard(m, true)).join('') : '<div class="empty">Aucune mission assignée.</div>'}</div><section class="panel driver-message-panel"><h2>Mes messages</h2><form id="driver-message-form"><label>Écrire un message<textarea name="content" rows="4" maxlength="2000" required></textarea></label><button>Enregistrer le message</button></form><div class="driver-message-list">${displayedMessages || '<p class="muted">Aucun message enregistré.</p>'}</div></section><p id="message" class="message" role="status"></p></section>`;
-  document.querySelector<HTMLFormElement>('#driver-message-form')!.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const formData = new FormData(event.currentTarget as HTMLFormElement);
-    const content = String(formData.get('content') ?? '');
+  const loginForm = createElement("form");
+  loginForm.id = "login-form";
+  loginForm.append(
+    createFieldLabel("Adresse e-mail", Object.assign(createElement("input"), {
+      name: "email",
+      type: "email",
+      autocomplete: "username",
+      required: true,
+    })),
+    createFieldLabel("Mot de passe", Object.assign(createElement("input"), {
+      name: "password",
+      type: "password",
+      autocomplete: "current-password",
+      minLength: 14,
+      required: true,
+    })),
+  );
+  const submitButton = createButton("Se connecter");
+  submitButton.type = "submit";
+  loginForm.append(submitButton);
+  loginForm.addEventListener("submit", async (submitEvent) => {
+    submitEvent.preventDefault();
+    const submittedForm = submitEvent.currentTarget as HTMLFormElement;
+    const submittedValues = new FormData(submittedForm);
     try {
-      await api('/api/messages', { method: 'POST', body: JSON.stringify({ content }) });
-      await showDriver(user);
-      showMessage('Message enregistré.');
+      await requestApi("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({
+          email: submittedValues.get("email"),
+          password: submittedValues.get("password"),
+        }),
+      });
+      await loadApplication();
     } catch (error) {
-      showMessage(error instanceof Error ? error.message : 'Enregistrement impossible', 'error');
+      setFeedback(error instanceof Error ? error.message : "Connexion impossible", true);
     }
   });
-  document.querySelectorAll<HTMLButtonElement>('[data-reveal]').forEach((button) => button.addEventListener('click', () => { const code = document.querySelector<HTMLElement>(`#secret-${button.dataset.reveal}`)!; const revealed = code.textContent !== '••••••••'; code.textContent = revealed ? '••••••••' : code.dataset.value!; button.textContent = revealed ? 'Afficher' : 'Masquer'; }));
-  document.querySelectorAll<HTMLButtonElement>('[data-status]').forEach((button) => button.addEventListener('click', async () => { try { await api(`/api/missions/${button.dataset.status}/status`, { method: 'PATCH', body: JSON.stringify({ status: button.dataset.next }) }); await showDriver(user); } catch (error) { showMessage(error instanceof Error ? error.message : 'Mise à jour impossible', 'error'); } }));
-  document.querySelectorAll<HTMLInputElement>('[data-upload]').forEach((input) => input.addEventListener('change', async () => { const file = input.files?.[0]; if (!file) return; const body = new FormData(); body.append('upload', file); try { await api(`/api/missions/${input.dataset.upload}/documents`, { method: 'POST', body }); await showDriver(user); showMessage('Preuve envoyée et contrôlée.'); } catch (error) { showMessage(error instanceof Error ? error.message : 'Envoi impossible', 'error'); } }));
-  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/ws`);
-  ws.onmessage = async (event) => { const notification = JSON.parse(event.data); if (notification.event === 'NEW_MISSION') { await showDriver(user); showMessage('Une nouvelle mission vous a été assignée.'); } };
+
+  loginSection.append(loginForm, createElement("p", "message"));
+  loginSection.lastElementChild?.setAttribute("id", "message");
+  applicationRoot.replaceChildren(loginSection);
 }
 
-async function showAdmin(user: User): Promise<void> {
-  const entries = await api<Array<{action:string;resource:string;result:string;created_at:string}>>('/api/audit');
-  app.innerHTML = `<header class="topbar"><div><span class="brand-mark small">G</span><strong>GML-SHIELD</strong></div><div class="account">${escapeHtml(user.email)} <button id="logout" class="text-button">Déconnexion</button></div></header><section class="content"><p class="eyebrow">ADMINISTRATION DE SÉCURITÉ</p><h1>Journal d’audit</h1><section class="panel audit-list">${entries.map((e) => `<div class="audit-row"><span>${escapeHtml(e.action)}</span><span>${escapeHtml(e.resource)}</span><span class="status">${escapeHtml(e.result)}</span><time>${new Date(e.created_at).toLocaleString('fr-FR')}</time></div>`).join('') || '<p class="muted">Aucune trace.</p>'}</section></section>`;
+function createMissionCard(mission: Mission, isDriver: boolean): HTMLElement {
+  const missionCard = createElement("article", "mission");
+  const missionHeading = createElement("div", "mission-top");
+  const statusClass = mission.status.toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  missionHeading.append(
+    createElement("span", `status ${statusClass}`, mission.status),
+    createElement("span", "muted", `Mission #${mission.id}`),
+  );
+  missionCard.append(
+    missionHeading,
+    createElement("h3", undefined, mission.title),
+  );
+
+  const destination = createElement("p");
+  destination.append(createElement("strong", undefined, "Destination"), document.createElement("br"));
+  destination.append(document.createTextNode(mission.destination));
+  missionCard.append(destination);
+
+  if (isDriver) {
+    missionCard.append(createWarehouseCodeDisplay(mission.secret_code));
+  }
+
+  const missionActions = createElement("div", "mission-actions");
+  if (isDriver) {
+    addDriverMissionActions(mission, missionCard, missionActions);
+  } else {
+    addDispatcherMissionActions(mission, missionActions);
+  }
+  missionCard.append(missionActions);
+  return missionCard;
 }
 
-async function loadApp(): Promise<void> {
+function createWarehouseCodeDisplay(warehouseCode: string): HTMLElement {
+  const secretDisplay = createElement("div", "secret");
+  const codeLabel = createElement("span", undefined, "Code entrepôt");
+  const warehouseCodeElement = createWarehouseCodeElement(warehouseCode);
+  const revealButton = createButton("Afficher", "text-button");
+  revealButton.addEventListener("click", () => {
+    const codeIsVisible = warehouseCodeElement.textContent !== "••••••••";
+    setTextContent(
+      warehouseCodeElement,
+      codeIsVisible ? "••••••••" : warehouseCodeElement.dataset.value ?? "",
+    );
+    revealButton.textContent = codeIsVisible ? "Afficher" : "Masquer";
+  });
+  secretDisplay.append(codeLabel, warehouseCodeElement, revealButton);
+  return secretDisplay;
+}
+
+function addDriverMissionActions(
+  mission: Mission,
+  missionCard: HTMLElement,
+  missionActions: HTMLElement,
+): void {
+  if (mission.status === "IN_PROGRESS") {
+    const uploadLabel = createElement("label", "upload-button", "Ajouter une preuve");
+    const uploadInput = createElement("input");
+    uploadInput.type = "file";
+    uploadInput.accept = "image/jpeg,image/png,application/pdf";
+    uploadInput.addEventListener("change", async () => {
+      const uploadedFile = uploadInput.files?.[0];
+      if (!uploadedFile) return;
+      const uploadBody = new FormData();
+      uploadBody.append("upload", uploadedFile);
+      try {
+        await requestApi(`/api/missions/${mission.id}/documents`, {
+          method: "POST",
+          body: uploadBody,
+        });
+        await loadApplication();
+        setFeedback("Preuve envoyée et contrôlée.");
+      } catch (error) {
+        setFeedback(error instanceof Error ? error.message : "Envoi impossible", true);
+      }
+    });
+    uploadLabel.append(uploadInput);
+    missionActions.append(uploadLabel);
+  }
+
+  const nextStatus = mission.status === "PENDING"
+    ? "IN_PROGRESS"
+    : mission.status === "IN_PROGRESS" && mission.documents.length > 0
+      ? "COMPLETED"
+      : undefined;
+  if (!nextStatus) return;
+
+  const actionLabel = nextStatus === "IN_PROGRESS" ? "Commencer la mission" : "Clôturer la mission";
+  const statusButton = createButton(actionLabel, "secondary");
+  statusButton.addEventListener("click", async () => {
+    try {
+      await requestApi(`/api/missions/${mission.id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: nextStatus }),
+      });
+      await loadApplication();
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Mise à jour impossible", true);
+    }
+  });
+  missionActions.append(statusButton);
+  missionCard.setAttribute("aria-label", `Mission ${mission.id}`);
+}
+
+function addDispatcherMissionActions(mission: Mission, missionActions: HTMLElement): void {
+  const firstDocumentId = mission.documents[0];
+  if (!firstDocumentId) return;
+
+  const downloadButton = createButton("Télécharger la preuve", "secondary");
+  downloadButton.addEventListener("click", async () => {
+    const missionPath = encodeURIComponent(String(mission.id));
+    const documentPath = encodeURIComponent(firstDocumentId);
+    try {
+      const response = await fetch(
+        `/api/missions/${missionPath}/documents/${documentPath}`,
+        { credentials: "same-origin" },
+      );
+      if (!response.ok) throw new Error(`Erreur ${response.status}`);
+      const downloadBlob = await response.blob();
+      const downloadLink = document.createElement("a");
+      const downloadUrl = URL.createObjectURL(downloadBlob);
+      downloadLink.href = downloadUrl;
+      downloadLink.download = "preuve";
+      downloadLink.click();
+      URL.revokeObjectURL(downloadUrl);
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Téléchargement impossible", true);
+    }
+  });
+  missionActions.append(downloadButton);
+}
+
+async function showDispatcherDashboard(user: User): Promise<void> {
+  const [missions, drivers] = await Promise.all([
+    requestApi<Mission[]>("/api/missions"),
+    requestApi<Driver[]>("/api/drivers"),
+  ]);
+  const content = createElement("section", "content");
+  content.append(
+    createElement("p", "eyebrow", "ESPACE RÉPARTITEUR"),
+    createElement("h1", undefined, "Suivi des missions"),
+  );
+  const columns = createElement("div", "columns");
+  const missionFormPanel = createElement("section", "panel");
+  missionFormPanel.append(createElement("h2", undefined, "Créer une mission"));
+  const missionForm = createElement("form");
+  missionForm.id = "mission-form";
+
+  const titleInput = createElement("input");
+  titleInput.name = "title";
+  titleInput.maxLength = 120;
+  titleInput.required = true;
+  const destinationInput = createElement("input");
+  destinationInput.name = "destination";
+  destinationInput.maxLength = 500;
+  destinationInput.required = true;
+  const warehouseCodeInput = createElement("input");
+  warehouseCodeInput.name = "secret_code";
+  warehouseCodeInput.maxLength = 200;
+  warehouseCodeInput.required = true;
+  const driverSelect = createElement("select");
+  driverSelect.name = "driver_id";
+  driverSelect.required = true;
+  for (const driver of drivers) {
+    const driverOption = createElement("option", undefined, driver.email);
+    driverOption.value = String(driver.id);
+    driverSelect.append(driverOption);
+  }
+  missionForm.append(
+    createFieldLabel("Intitulé", titleInput),
+    createFieldLabel("Destination", destinationInput),
+    createFieldLabel("Code entrepôt", warehouseCodeInput),
+    createFieldLabel("Chauffeur", driverSelect),
+  );
+  const createMissionButton = createButton("Créer la mission");
+  createMissionButton.type = "submit";
+  missionForm.append(createMissionButton);
+  missionForm.addEventListener("submit", async (submitEvent) => {
+    submitEvent.preventDefault();
+    const submittedValues = new FormData(submitEvent.currentTarget as HTMLFormElement);
+    try {
+      await requestApi("/api/missions", {
+        method: "POST",
+        body: JSON.stringify({
+          title: submittedValues.get("title"),
+          destination: submittedValues.get("destination"),
+          secret_code: submittedValues.get("secret_code"),
+          driver_id: Number(submittedValues.get("driver_id")),
+        }),
+      });
+      await showDispatcherDashboard(user);
+      setFeedback("Mission créée et transmise au chauffeur.");
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Création impossible", true);
+    }
+  });
+  missionFormPanel.append(missionForm, createElement("p", "message"));
+  missionFormPanel.lastElementChild?.setAttribute("id", "message");
+
+  const missionsPanel = createElement("section");
+  missionsPanel.append(createElement("h2", undefined, "Missions créées"));
+  const missionList = createElement("div", "mission-list");
+  if (missions.length === 0) {
+    missionList.append(createElement("p", "muted", "Aucune mission."));
+  } else {
+    for (const mission of missions) missionList.append(createMissionCard(mission, false));
+  }
+  missionsPanel.append(missionList);
+  columns.append(missionFormPanel, missionsPanel);
+  content.append(columns);
+  applicationRoot.replaceChildren(createApplicationHeader(user.email), content);
+}
+
+async function showDriverDashboard(user: User): Promise<void> {
+  const [missions, driverMessages] = await Promise.all([
+    requestApi<Mission[]>("/api/missions"),
+    requestApi<DriverMessage[]>("/api/messages"),
+  ]);
+  const content = createElement("section", "content narrow");
+  content.append(
+    createElement("p", "eyebrow", "ESPACE CHAUFFEUR"),
+    createElement("h1", undefined, "Mes missions"),
+    createElement("p", "muted", "Vos missions restent accessibles après une interruption réseau."),
+  );
+
+  const missionList = createElement("div", "mission-list");
+  missionList.id = "mission-list";
+  if (missions.length === 0) {
+    missionList.append(createElement("div", "empty", "Aucune mission assignée."));
+  } else {
+    for (const mission of missions) missionList.append(createMissionCard(mission, true));
+  }
+
+  const messagesPanel = createElement("section", "panel driver-message-panel");
+  messagesPanel.append(createElement("h2", undefined, "Mes messages"));
+  const messageForm = createElement("form");
+  messageForm.id = "driver-message-form";
+  const messageInput = createElement("textarea");
+  messageInput.name = "content";
+  messageInput.rows = 4;
+  messageInput.maxLength = 2000;
+  messageInput.required = true;
+  messageForm.append(createFieldLabel("Écrire un message", messageInput));
+  const saveMessageButton = createButton("Enregistrer le message");
+  saveMessageButton.type = "submit";
+  messageForm.append(saveMessageButton);
+  messageForm.addEventListener("submit", async (submitEvent) => {
+    submitEvent.preventDefault();
+    const submittedValues = new FormData(submitEvent.currentTarget as HTMLFormElement);
+    const messageContent = String(submittedValues.get("content") ?? "");
+    try {
+      await requestApi("/api/messages", {
+        method: "POST",
+        body: JSON.stringify({ content: messageContent }),
+      });
+      await showDriverDashboard(user);
+      setFeedback("Message enregistré.");
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Enregistrement impossible", true);
+    }
+  });
+
+  const messageList = createElement("div", "driver-message-list");
+  if (driverMessages.length === 0) {
+    messageList.append(createElement("p", "muted", "Aucun message enregistré."));
+  } else {
+    for (const driverMessage of driverMessages) {
+      messageList.append(createDriverMessageElement(driverMessage));
+    }
+  }
+  messagesPanel.append(messageForm, messageList);
+  content.append(missionList, messagesPanel, createElement("p", "message"));
+  content.lastElementChild?.setAttribute("id", "message");
+
+  driverNotificationSocket?.close();
+  const websocketProtocol = location.protocol === "https:" ? "wss:" : "ws:";
+  driverNotificationSocket = new WebSocket(`${websocketProtocol}//${location.host}/api/ws`);
+  driverNotificationSocket.addEventListener("message", async (socketMessage) => {
+    let notification: unknown;
+    try {
+      notification = JSON.parse(socketMessage.data);
+    } catch {
+      return;
+    }
+    if (
+      notification
+      && typeof notification === "object"
+      && "event" in notification
+      && notification.event === "NEW_MISSION"
+    ) {
+      await showDriverDashboard(user);
+      setFeedback("Une nouvelle mission vous a été assignée.");
+    }
+  });
+  applicationRoot.replaceChildren(createApplicationHeader(user.email, "Temps réel"), content);
+}
+
+async function showSecurityDashboard(user: User): Promise<void> {
+  const auditEntries = await requestApi<AuditEntry[]>("/api/audit");
+  const content = createElement("section", "content");
+  content.append(
+    createElement("p", "eyebrow", "ADMINISTRATION DE SÉCURITÉ"),
+    createElement("h1", undefined, "Journal d’audit"),
+  );
+  const auditPanel = createElement("section", "panel audit-list");
+  for (const auditEntry of auditEntries) {
+    const auditRow = createElement("div", "audit-row");
+    auditRow.append(
+      createElement("span", undefined, auditEntry.action),
+      createElement("span", undefined, auditEntry.resource),
+      createElement("span", "status", auditEntry.result),
+      createElement("time", undefined, new Date(auditEntry.created_at).toLocaleString("fr-FR")),
+    );
+    auditPanel.append(auditRow);
+  }
+  if (auditEntries.length === 0) auditPanel.append(createElement("p", "muted", "Aucune trace."));
+  content.append(auditPanel);
+  applicationRoot.replaceChildren(createApplicationHeader(user.email), content);
+}
+
+async function loadApplication(): Promise<void> {
+  driverNotificationSocket?.close();
+  driverNotificationSocket = undefined;
   try {
-    const user = await api<User>('/api/auth/me');
-    if (user.role === 'DRIVER') await showDriver(user);
-    else if (user.role === 'DISPATCHER') await showDispatcher(user);
-    else await showAdmin(user);
-    document.querySelector<HTMLButtonElement>('#logout')?.addEventListener('click', async () => { try { await api('/api/auth/logout', { method: 'POST' }); } finally { renderLogin(); } });
-  } catch { renderLogin(); }
+    const currentUser = await requestApi<User>("/api/auth/me");
+    if (currentUser.role === "DRIVER") {
+      await showDriverDashboard(currentUser);
+    } else if (currentUser.role === "DISPATCHER") {
+      await showDispatcherDashboard(currentUser);
+    } else {
+      await showSecurityDashboard(currentUser);
+    }
+    applicationRoot.querySelector<HTMLButtonElement>(".account button")?.addEventListener("click", async () => {
+      try {
+        await requestApi("/api/auth/logout", { method: "POST" });
+      } finally {
+        driverNotificationSocket?.close();
+        renderLogin();
+      }
+    });
+  } catch {
+    renderLogin();
+  }
 }
 
 renderLogin();
-loadApp();
+void loadApplication();
