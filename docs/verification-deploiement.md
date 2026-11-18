@@ -1,16 +1,17 @@
 # Vérification du déploiement
 
-URL : <https://fysnej9mo041xdwkmgwyovj5.solutioncloud.app/>
+Définissez l’URL de l’instance à vérifier dans `GML_APP_URL` avant d’exécuter les commandes ci-dessous.
 
 Ne placez aucun mot de passe, cookie ou jeton dans ce document. Aucun compte de démonstration n’est créé automatiquement. Créez-le uniquement avec un accès autorisé, puis transmettez son mot de passe par le canal privé de l’établissement.
 
 ## Contrôles sans authentification
 
 ```bash
-curl -i https://fysnej9mo041xdwkmgwyovj5.solutioncloud.app/health
-curl -I http://fysnej9mo041xdwkmgwyovj5.solutioncloud.app/
-curl -i https://fysnej9mo041xdwkmgwyovj5.solutioncloud.app/api/auth/me
-curl -i https://fysnej9mo041xdwkmgwyovj5.solutioncloud.app/api/messages
+export GML_APP_URL="https://votre-domaine.example"
+curl -i "${GML_APP_URL%/}/health"
+curl -I "${GML_APP_URL%/}/"
+curl -i "${GML_APP_URL%/}/api/auth/me"
+curl -i "${GML_APP_URL%/}/api/messages"
 ```
 
 Résultats attendus : `/health` renvoie HTTP 200, HTTP redirige vers HTTPS, et les routes protégées refusent un appel non authentifié.

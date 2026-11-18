@@ -88,6 +88,6 @@ Le build exécute le contrôle TypeScript avant Vite. Le lockfile versionné ren
 
 ## Déploiement et démonstration
 
-Application : [GML-SHIELD](https://fysnej9mo041xdwkmgwyovj5.solutioncloud.app/). Les contrôles sans authentification et la procédure de vérification fonctionnelle sont décrits dans [`docs/verification-deploiement.md`](docs/verification-deploiement.md). La correspondance entre la consigne B5Q3 et les preuves techniques est dans [`docs/B5Q3-preuves-conformite.md`](docs/B5Q3-preuves-conformite.md).
+La procédure de vérification après déploiement est décrite dans [`docs/verification-deploiement.md`](docs/verification-deploiement.md).
 
 Le mot de passe du compte de démonstration, s’il est créé, n’est jamais conservé dans ce dépôt. Le MVP n’a pas encore fait l’objet d’un audit de sécurité indépendant.
