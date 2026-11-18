@@ -1,13 +1,13 @@
 # Vérification du déploiement
 
-Définissez l’URL de l’instance à vérifier dans `GML_APP_URL` avant d’exécuter les commandes ci-dessous.
+URL de l’instance : <https://fysnej9mo041xdwkmgwyovj5.solutioncloud.app/>
 
 Ne placez aucun mot de passe, cookie ou jeton dans ce document. Aucun compte de démonstration n’est créé automatiquement. Créez-le uniquement avec un accès autorisé, puis transmettez son mot de passe par le canal privé de l’établissement.
 
 ## Contrôles sans authentification
 
 ```bash
-export GML_APP_URL="https://votre-domaine.example"
+export GML_APP_URL="https://fysnej9mo041xdwkmgwyovj5.solutioncloud.app"
 curl -i "${GML_APP_URL%/}/health"
 curl -I "${GML_APP_URL%/}/"
 curl -i "${GML_APP_URL%/}/api/auth/me"
