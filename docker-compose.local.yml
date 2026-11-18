@@ -1,3 +1,6 @@
 services:
   app:
     ports: ["127.0.0.1:8000:8000"]
+    environment:
+      GML_ALLOWED_ORIGIN: http://localhost:8000
+      GML_COOKIE_SECURE: "false"
