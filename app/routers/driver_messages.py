@@ -25,6 +25,7 @@ async def create_driver_message(
     database_session: DatabaseSession,
     user: Annotated[User, Depends(require_csrf_token)],
 ) -> DriverMessageView:
+    """Derive ownership from the session so clients cannot write for another driver."""
     require_driver(user)
     driver_message = DriverMessage(driver_id=user.id, content=message_input.content)
     database_session.add(driver_message)
@@ -47,6 +48,7 @@ async def list_driver_messages(
     database_session: DatabaseSession,
     user: Annotated[User, Depends(get_authenticated_user)],
 ) -> list[DriverMessageView]:
+    """Filter at query time to avoid loading or exposing another driver's messages."""
     require_driver(user)
     message_query = (
         select(DriverMessage)

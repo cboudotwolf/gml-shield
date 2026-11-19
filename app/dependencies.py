@@ -22,6 +22,11 @@ DatabaseSession = Annotated[AsyncSession, Depends(get_database_session)]
 
 
 async def get_authenticated_user(request: Request, database_session: DatabaseSession) -> User:
+    """Validate both the signed token and its server-side session.
+
+    Keeping a session record makes an otherwise valid JWT immediately revocable and
+    prevents access when the user has been disabled after the token was issued.
+    """
     access_token = request.cookies.get("gml_access")
     if not access_token:
         raise HTTPException(401, "Authentification requise")
@@ -63,6 +68,7 @@ async def require_csrf_token(
     request: Request,
     authenticated_user: Annotated[User, Depends(get_authenticated_user)],
 ) -> User:
+    """Require the cookie/header pair so another origin cannot replay ambient cookies."""
     login_session: LoginSession = request.state.login_session
     csrf_cookie = request.cookies.get("gml_csrf", "")
     csrf_header = request.headers.get("x-csrf-token", "")

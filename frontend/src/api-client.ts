@@ -5,6 +5,10 @@ function readCsrfCookie(): string {
   return csrfCookie ? decodeURIComponent(csrfCookie.slice("gml_csrf=".length)) : "";
 }
 
+/**
+ * Centralize same-origin cookies and double-submit CSRF protection.
+ * The access token stays in an HttpOnly cookie and is never exposed to client code.
+ */
 export async function requestApi<ResponseBody>(
   resourcePath: string,
   requestOptions: RequestInit = {},
