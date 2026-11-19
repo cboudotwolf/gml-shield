@@ -22,6 +22,8 @@ class User(Base):
 
 
 class LoginSession(Base):
+    """Server-side state that allows a short-lived access token to be revoked early."""
+
     __tablename__ = "sessions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -47,6 +49,8 @@ class Mission(Base):
 
 
 class DriverMessage(Base):
+    """Message owned by one driver; ownership is assigned only from authentication state."""
+
     __tablename__ = "driver_messages"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

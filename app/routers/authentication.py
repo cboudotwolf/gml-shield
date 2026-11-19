@@ -35,6 +35,7 @@ login_attempts_by_ip: dict[str, tuple[float, int]] = {}
 def set_authentication_cookies(
     response: Response, user_id: int, session_id: str, csrf_token: str
 ) -> None:
+    """Keep the access token unreadable by JavaScript while exposing only the CSRF token."""
     cookie_options = {
         "secure": settings.cookie_secure,
         "samesite": "strict",
@@ -57,6 +58,11 @@ async def login(
     response: Response,
     database_session: DatabaseSession,
 ):
+    """Authenticate without revealing account existence and create a revocable session.
+
+    The generic failure response limits account enumeration. The short-lived JWT is
+    coupled to server-side state so logout can revoke it before its natural expiry.
+    """
     validate_request_origin(request)
     client_ip = request.client.host if request.client else "unknown"
     current_timestamp = time.monotonic()
